@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"net"
 	"strings"
@@ -337,19 +338,20 @@ func (t *UDPTransport) acceptPackets() {
 		// TODO: is there a better way to pass a copy to the handleRcv() function?
 		b := make([]byte, n)
 		copy(b, buf[:n])
+		r := t.readerPool.Get().(*bytes.Reader)
+		r.Reset(b)
 		t.openConnections.Add(1)
-		go t.handleRcv(addr, b)
+		go t.handleRcv(addr, r)
 	}
 }
 
-func (t *UDPTransport) handleRcv(addr net.Addr, buf []byte) {
+func (t *UDPTransport) handleRcv(addr net.Addr, r io.Reader) {
 	defer t.openConnections.Done()
 
 	lbs := t.connectionLabels(addr.String())
 
-	r := t.readerPool.Get().(*bytes.Reader)
-	r.Reset(buf)
 	err := syslogparser.ParseStream(r, func(result *syslog.Result) {
+		t.readerPool.Put(r)
 		if err := result.Error; err != nil {
 			t.handleMessageError(err)
 			return

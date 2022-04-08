@@ -324,7 +324,7 @@ func (t *UDPTransport) acceptPackets() {
 		addr net.Addr
 		err  error
 	)
-	streams := make(map[string]*ChannelConn)
+	streams := make(map[string]*AsyncConnPipe)
 
 	buf := make([]byte, t.maxMessageLength())
 	for {
@@ -340,7 +340,7 @@ func (t *UDPTransport) acceptPackets() {
 
 		stream, ok := streams[addr.String()]
 		if !ok {
-			stream = &ChannelConn{ch: make(chan []byte, 1024), addr: addr}
+			stream = NewAsycPipe(addr, 1024)
 			streams[addr.String()] = stream
 			t.openConnections.Add(1)
 			go t.handleRcv(stream)
@@ -349,39 +349,65 @@ func (t *UDPTransport) acceptPackets() {
 	}
 }
 
-type ChannelConn struct {
-	addr     net.Addr
-	ch       chan []byte
-	isClosed bool
+type AsyncConnPipe struct {
+	addr net.Addr
+	ch   chan []byte
+	done chan struct{}
 }
 
-func (cc *ChannelConn) Read(p []byte) (int, error) {
-	r := <-cc.ch
-	if len(r) == 0 {
-		return 0, io.EOF
+func NewAsycPipe(addr net.Addr, size int) *AsyncConnPipe {
+	return &AsyncConnPipe{
+		addr: addr,
+		ch:   make(chan []byte, size),
+		done: make(chan struct{}),
 	}
-	if len(r) > len(p) {
-		return 0, fmt.Errorf("dst smaller than src")
-	}
-	return copy(p, r), nil
-}
-func (cc *ChannelConn) Write(p []byte) (int, error) {
-	if cc.isClosed {
-		return 0, nil
-	}
-	buf := make([]byte, len(p))
-	copy(buf, p)
-	cc.ch <- buf
-	return len(buf), nil
 }
 
-func (cc *ChannelConn) Close() error {
-	close(cc.ch)
-	cc.isClosed = true
+func (pipe *AsyncConnPipe) Read(p []byte) (int, error) {
+	select {
+	case <-pipe.done:
+		return 0, io.ErrClosedPipe
+	default:
+	}
+
+	select {
+	case rcv := <-pipe.ch:
+		if len(rcv) == 0 {
+			return 0, io.EOF
+		}
+		if len(rcv) > len(p) {
+			rcv = rcv[:len(p)]
+		}
+		return copy(p, rcv), nil
+	case <-pipe.done:
+		return 0, io.ErrClosedPipe
+	}
+}
+
+func (pipe *AsyncConnPipe) Write(p []byte) (int, error) {
+	select {
+	case <-pipe.done:
+		return 0, io.ErrClosedPipe
+	default:
+	}
+
+	snd := make([]byte, len(p))
+	copy(snd, p)
+	select {
+	case pipe.ch <- snd:
+		return len(snd), nil
+	case <-pipe.done:
+		return 0, io.ErrClosedPipe
+	}
+}
+
+func (pipe *AsyncConnPipe) Close() error {
+	pipe.done <- struct{}{}
+	close(pipe.ch)
 	return nil
 }
 
-func (t *UDPTransport) handleRcv(c *ChannelConn) {
+func (t *UDPTransport) handleRcv(c *AsyncConnPipe) {
 	defer t.openConnections.Done()
 
 	handlerCtx, cancel := context.WithCancel(t.ctx)

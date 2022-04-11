@@ -30,10 +30,16 @@ var splittableRangeVectorOp = map[string]struct{}{
 	syntax.OpRangeTypeMin:       {},
 }
 
+// RangeMapper is used to rewrite LogQL sample expressions into multiple
+// downstream sample expressions with a smaller time range that can be executed
+// using the downstream engine.
+// A rewrite is performed using the following rules:
 type RangeMapper struct {
 	splitByInterval time.Duration
 }
 
+// NewRangeMapper creates a new RangeMapper instance with the given duration as
+// split interval. The interval must be greater than 0.
 func NewRangeMapper(interval time.Duration) (RangeMapper, error) {
 	if interval <= 0 {
 		return RangeMapper{}, fmt.Errorf("cannot create RangeMapper with splitByInterval <= 0; got %s", interval)
@@ -43,7 +49,11 @@ func NewRangeMapper(interval time.Duration) (RangeMapper, error) {
 	}, nil
 }
 
-// Parse returns (noop, parsed expression, error)
+// Parse parses the given LogQL query string into a sample expression and
+// applies the rewrite rules for splitting it into a sample expression that can
+// be executed by the downstream engine.
+// It returns a boolean indicating whether a rewrite was possible, the
+// rewritten sample expression, and an error in case the rewrite failed.
 func (m RangeMapper) Parse(query string) (bool, syntax.Expr, error) {
 	origExpr, err := syntax.ParseSampleExpr(query)
 	if err != nil {
@@ -62,6 +72,10 @@ func (m RangeMapper) Parse(query string) (bool, syntax.Expr, error) {
 	return origExpr.String() == modExpr.String(), modExpr, err
 }
 
+// Map rewrites an existing sample expression and returns the modified
+// expression. It is called recursively on the expression tree.
+// The function takes an optional vector aggregation as second argument, that
+// is pushed down to the downstream expression.
 func (m RangeMapper) Map(expr syntax.SampleExpr, vectorAggrPushdown *syntax.VectorAggregationExpr) (syntax.SampleExpr, error) {
 	// immediately clone the passed expr to avoid mutating the original
 	expr, err := clone(expr)
@@ -307,7 +321,14 @@ func (m RangeMapper) mapRangeAggregationExpr(expr *syntax.RangeAggregationExpr, 
 	}
 }
 
-// isSplittableByRange returns whether it is possible to optimize the given sample expression
+// isSplittableByRange returns whether it is possible to optimize the given
+// sample expression.
+// A vector aggregation is splittable, if the aggregation operation is
+// supported and the inner expression is also splittable.
+// A range aggregation is splittable, if the aggregation operation is
+// supported.
+// A binary expression is splittable, if both the left and the right hand side
+// are splittable.
 func isSplittableByRange(expr syntax.SampleExpr) bool {
 	switch e := expr.(type) {
 	case *syntax.VectorAggregationExpr:
@@ -327,6 +348,8 @@ func isSplittableByRange(expr syntax.SampleExpr) bool {
 
 // clone returns a copy of the given sample expression
 // This is needed whenever we want to modify the existing query tree.
+// clone is identical as syntax.Expr.Clone() but with the additional type
+// casting for syntax.SampleExpr.
 func clone(expr syntax.SampleExpr) (syntax.SampleExpr, error) {
 	return syntax.ParseSampleExpr(expr.String())
 }

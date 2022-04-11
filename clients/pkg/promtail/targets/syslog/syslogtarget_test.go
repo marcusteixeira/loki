@@ -284,13 +284,11 @@ func Benchmark_SyslogTarget(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 
-			c, err := net.Dial(testdata.protocol, addr)
-			require.NoError(b, err)
-			defer c.Close()
-
+			c, _ := net.Dial(testdata.protocol, addr)
 			for n := 0; n < b.N; n++ {
 				writeMessagesToStream(c, messages, testdata.formatFunc)
 			}
+			c.Close()
 
 			require.Eventuallyf(b, func() bool {
 				return len(client.Received()) == len(messages)*b.N
@@ -308,7 +306,7 @@ func TestSyslogTarget(t *testing.T) {
 	}{
 		{"tpc newline separated", protocolTCP, fmtNewline},
 		{"tpc octetcounting", protocolTCP, fmtOctetCounting},
-		// {"udp newline separated", protocolUDP, fmtNewline},
+		{"udp newline separated", protocolUDP, fmtNewline},
 		{"udp octetcounting", protocolUDP, fmtOctetCounting},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -326,16 +324,13 @@ func TestSyslogTarget(t *testing.T) {
 				},
 			})
 			require.NoError(t, err)
+			defer tgt.Stop()
+
 			require.Eventually(t, tgt.Ready, time.Second, 10*time.Millisecond)
-			t.Cleanup(func() {
-				require.NoError(t, tgt.Stop())
-			})
 
 			addr := tgt.ListenAddress().String()
 			c, err := net.Dial(tt.protocol, addr)
 			require.NoError(t, err)
-
-			defer c.Close()
 
 			messages := []string{
 				`<165>1 2018-10-11T22:14:15.003Z host5 e - id1 [custom@32473 exkey="1"] An application event log entry...`,
@@ -418,7 +413,7 @@ func TestSyslogTarget_RFC5424Messages(t *testing.T) {
 	}{
 		{"tpc newline separated", protocolTCP, fmtNewline},
 		{"tpc octetcounting", protocolTCP, fmtOctetCounting},
-		// {"udp newline separated", protocolUDP, fmtNewline},
+		{"udp newline separated", protocolUDP, fmtNewline},
 		{"udp octetcounting", protocolUDP, fmtOctetCounting},
 	} {
 		t.Run(tt.name, func(t *testing.T) {})
@@ -832,4 +827,3 @@ func TestSyslogTarget_IdleTimeout(t *testing.T) {
 	_, err = c.Read(buf)
 	require.EqualError(t, err, "EOF")
 }
-

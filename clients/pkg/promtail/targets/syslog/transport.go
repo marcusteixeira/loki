@@ -133,6 +133,64 @@ func (c *idleTimeoutConn) setDeadline() {
 	_ = c.Conn.SetDeadline(time.Now().Add(c.idleTimeout))
 }
 
+type AsyncConnPipe struct {
+	addr net.Addr
+	ch   chan []byte
+	done chan struct{}
+}
+
+func NewAsycPipe(addr net.Addr, size int) *AsyncConnPipe {
+	return &AsyncConnPipe{
+		addr: addr,
+		ch:   make(chan []byte, size),
+		done: make(chan struct{}),
+	}
+}
+
+func (pipe *AsyncConnPipe) Read(p []byte) (int, error) {
+	select {
+	case <-pipe.done:
+		return 0, io.ErrClosedPipe
+	default:
+	}
+
+	select {
+	case rcv := <-pipe.ch:
+		if len(rcv) == 0 {
+			return 0, io.EOF
+		}
+		if len(rcv) > len(p) {
+			rcv = rcv[:len(p)]
+		}
+		return copy(p, rcv), nil
+	case <-pipe.done:
+		return 0, io.ErrClosedPipe
+	}
+}
+
+func (pipe *AsyncConnPipe) Write(p []byte) (int, error) {
+	select {
+	case <-pipe.done:
+		return 0, io.ErrClosedPipe
+	default:
+	}
+
+	snd := make([]byte, len(p))
+	copy(snd, p)
+	select {
+	case pipe.ch <- snd:
+		return len(snd), nil
+	case <-pipe.done:
+		return 0, io.ErrClosedPipe
+	}
+}
+
+func (pipe *AsyncConnPipe) Close() error {
+	pipe.done <- struct{}{}
+	close(pipe.ch)
+	return nil
+}
+
 type TCPTransport struct {
 	*baseTransport
 	listener net.Listener
@@ -325,8 +383,8 @@ func (t *UDPTransport) acceptPackets() {
 		err  error
 	)
 	streams := make(map[string]*AsyncConnPipe)
-
 	buf := make([]byte, t.maxMessageLength())
+
 	for {
 		if !t.Ready() {
 			level.Info(t.logger).Log("msg", "syslog server shutting down", "protocol", protocolUDP, "err", t.ctx.Err())
@@ -349,64 +407,6 @@ func (t *UDPTransport) acceptPackets() {
 	}
 }
 
-type AsyncConnPipe struct {
-	addr net.Addr
-	ch   chan []byte
-	done chan struct{}
-}
-
-func NewAsycPipe(addr net.Addr, size int) *AsyncConnPipe {
-	return &AsyncConnPipe{
-		addr: addr,
-		ch:   make(chan []byte, size),
-		done: make(chan struct{}),
-	}
-}
-
-func (pipe *AsyncConnPipe) Read(p []byte) (int, error) {
-	select {
-	case <-pipe.done:
-		return 0, io.ErrClosedPipe
-	default:
-	}
-
-	select {
-	case rcv := <-pipe.ch:
-		if len(rcv) == 0 {
-			return 0, io.EOF
-		}
-		if len(rcv) > len(p) {
-			rcv = rcv[:len(p)]
-		}
-		return copy(p, rcv), nil
-	case <-pipe.done:
-		return 0, io.ErrClosedPipe
-	}
-}
-
-func (pipe *AsyncConnPipe) Write(p []byte) (int, error) {
-	select {
-	case <-pipe.done:
-		return 0, io.ErrClosedPipe
-	default:
-	}
-
-	snd := make([]byte, len(p))
-	copy(snd, p)
-	select {
-	case pipe.ch <- snd:
-		return len(snd), nil
-	case <-pipe.done:
-		return 0, io.ErrClosedPipe
-	}
-}
-
-func (pipe *AsyncConnPipe) Close() error {
-	pipe.done <- struct{}{}
-	close(pipe.ch)
-	return nil
-}
-
 func (t *UDPTransport) handleRcv(c *AsyncConnPipe) {
 	defer t.openConnections.Done()
 
@@ -414,7 +414,7 @@ func (t *UDPTransport) handleRcv(c *AsyncConnPipe) {
 	defer cancel()
 	go func() {
 		<-handlerCtx.Done()
-		_ = c.Close()
+		c.Close()
 	}()
 
 	lbs := t.connectionLabels(c.addr.String())

@@ -8,6 +8,7 @@ import (
 	"io"
 	"io/ioutil"
 	"net"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -150,21 +151,22 @@ func NewAsycPipe(addr net.Addr, size int) *AsyncConnPipe {
 func (pipe *AsyncConnPipe) Read(p []byte) (int, error) {
 	select {
 	case <-pipe.done:
-		return 0, io.ErrClosedPipe
+		return 0, io.EOF
 	default:
 	}
 
 	select {
 	case rcv := <-pipe.ch:
 		if len(rcv) == 0 {
-			return 0, io.EOF
+			return 0, nil
 		}
 		if len(rcv) > len(p) {
-			rcv = rcv[:len(p)]
+			return 0, io.ErrShortBuffer
 		}
+		fmt.Fprintf(os.Stderr, "read=%q\n", string(rcv))
 		return copy(p, rcv), nil
 	case <-pipe.done:
-		return 0, io.ErrClosedPipe
+		return 0, io.EOF
 	}
 }
 
@@ -179,6 +181,7 @@ func (pipe *AsyncConnPipe) Write(p []byte) (int, error) {
 	copy(snd, p)
 	select {
 	case pipe.ch <- snd:
+		fmt.Fprintf(os.Stderr, "write=%q\n", string(snd))
 		return len(snd), nil
 	case <-pipe.done:
 		return 0, io.ErrClosedPipe

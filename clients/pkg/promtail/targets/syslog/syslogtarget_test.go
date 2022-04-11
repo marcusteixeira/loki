@@ -239,7 +239,7 @@ var (
 )
 
 func Benchmark_SyslogTarget(b *testing.B) {
-	for _, testdata := range []struct {
+	for _, tt := range []struct {
 		name       string
 		protocol   string
 		formatFunc formatFunc
@@ -247,14 +247,14 @@ func Benchmark_SyslogTarget(b *testing.B) {
 		{"tcp", protocolTCP, fmtOctetCounting},
 		{"udp", protocolUDP, fmtOctetCounting},
 	} {
-		b.Run(testdata.name, func(b *testing.B) {
-			logger := log.NewNopLogger()
+		tt := tt
+		b.Run(tt.name, func(b *testing.B) {
 			client := fake.New(func() {})
 
 			metrics := NewMetrics(nil)
-			tgt, _ := NewSyslogTarget(metrics, logger, client, []*relabel.Config{}, &scrapeconfig.SyslogTargetConfig{
+			tgt, _ := NewSyslogTarget(metrics, log.NewNopLogger(), client, []*relabel.Config{}, &scrapeconfig.SyslogTargetConfig{
 				ListenAddress:       "127.0.0.1:0",
-				ListenProtocol:      testdata.protocol,
+				ListenProtocol:      tt.protocol,
 				LabelStructuredData: true,
 				Labels: model.LabelSet{
 					"test": "syslog_target",
@@ -283,9 +283,9 @@ func Benchmark_SyslogTarget(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 
-			c, _ := net.Dial(testdata.protocol, addr)
+			c, _ := net.Dial(tt.protocol, addr)
 			for n := 0; n < b.N; n++ {
-				writeMessagesToStream(c, messages, testdata.formatFunc)
+				writeMessagesToStream(c, messages, tt.formatFunc)
 			}
 			c.Close()
 
@@ -308,6 +308,7 @@ func TestSyslogTarget(t *testing.T) {
 		{"udp newline separated", protocolUDP, fmtNewline},
 		{"udp octetcounting", protocolUDP, fmtOctetCounting},
 	} {
+		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			w := log.NewSyncWriter(os.Stderr)
 			logger := log.NewLogfmtLogger(w)
@@ -343,7 +344,7 @@ func TestSyslogTarget(t *testing.T) {
 
 			require.Eventuallyf(t, func() bool {
 				return len(client.Received()) == len(messages)
-			}, time.Second, time.Millisecond, "Expected to receive %d messages, got %d.", len(messages), len(client.Received()))
+			}, time.Second, 10*time.Millisecond, "Expected to receive %d messages.", len(messages))
 
 			labels := make([]model.LabelSet, 0, len(messages))
 			for _, entry := range client.Received() {
@@ -415,6 +416,7 @@ func TestSyslogTarget_RFC5424Messages(t *testing.T) {
 		{"udp newline separated", protocolUDP, fmtNewline},
 		{"udp octetcounting", protocolUDP, fmtOctetCounting},
 	} {
+		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			w := log.NewSyncWriter(os.Stderr)
 			logger := log.NewLogfmtLogger(w)

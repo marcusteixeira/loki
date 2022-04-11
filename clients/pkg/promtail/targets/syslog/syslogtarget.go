@@ -174,6 +174,7 @@ func (t *SyslogTarget) handleMessage(connLabels labels.Labels, msg syslog.Messag
 }
 
 func (t *SyslogTarget) messageSender(entries chan<- api.Entry) {
+	count := 0
 	for msg := range t.messages {
 		entries <- api.Entry{
 			Labels: msg.labels,
@@ -182,8 +183,10 @@ func (t *SyslogTarget) messageSender(entries chan<- api.Entry) {
 				Line:      msg.message,
 			},
 		}
+		count++
 		t.metrics.syslogEntries.Inc()
 	}
+	level.Warn(t.logger).Log("count", count)
 	t.messagesDone <- struct{}{}
 }
 

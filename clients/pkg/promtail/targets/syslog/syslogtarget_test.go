@@ -316,6 +316,7 @@ func TestSyslogTarget(t *testing.T) {
 
 			metrics := NewMetrics(nil)
 			tgt, err := NewSyslogTarget(metrics, logger, client, relabelConfig(t), &scrapeconfig.SyslogTargetConfig{
+				MaxMessageLength:    1 << 12, // explicitly not use default value
 				ListenAddress:       "127.0.0.1:0",
 				ListenProtocol:      tt.protocol,
 				LabelStructuredData: true,

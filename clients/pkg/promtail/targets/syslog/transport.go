@@ -8,7 +8,6 @@ import (
 	"io"
 	"io/ioutil"
 	"net"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -138,59 +137,29 @@ type AsyncConnPipe struct {
 	addr net.Addr
 	ch   chan []byte
 	done chan struct{}
+	*io.PipeReader
+	*io.PipeWriter
 }
 
 func NewAsycPipe(addr net.Addr, size int) *AsyncConnPipe {
+	pr, pw := io.Pipe()
 	return &AsyncConnPipe{
-		addr: addr,
-		ch:   make(chan []byte, size),
-		done: make(chan struct{}),
-	}
-}
-
-func (pipe *AsyncConnPipe) Read(p []byte) (int, error) {
-	select {
-	case <-pipe.done:
-		return 0, io.EOF
-	default:
-	}
-
-	select {
-	case rcv := <-pipe.ch:
-		if len(rcv) == 0 {
-			return 0, nil
-		}
-		if len(rcv) > len(p) {
-			return 0, io.ErrShortBuffer
-		}
-		fmt.Fprintf(os.Stderr, "read=%q\n", string(rcv))
-		return copy(p, rcv), nil
-	case <-pipe.done:
-		return 0, io.EOF
-	}
-}
-
-func (pipe *AsyncConnPipe) Write(p []byte) (int, error) {
-	select {
-	case <-pipe.done:
-		return 0, io.ErrClosedPipe
-	default:
-	}
-
-	snd := make([]byte, len(p))
-	copy(snd, p)
-	select {
-	case pipe.ch <- snd:
-		fmt.Fprintf(os.Stderr, "write=%q\n", string(snd))
-		return len(snd), nil
-	case <-pipe.done:
-		return 0, io.ErrClosedPipe
+		addr:       addr,
+		ch:         make(chan []byte, size),
+		done:       make(chan struct{}),
+		PipeReader: pr,
+		PipeWriter: pw,
 	}
 }
 
 func (pipe *AsyncConnPipe) Close() error {
-	pipe.done <- struct{}{}
-	close(pipe.ch)
+	var err error
+	if err = pipe.PipeReader.Close(); err != nil {
+		return err
+	}
+	if err = pipe.PipeWriter.Close(); err != nil {
+		return err
+	}
 	return nil
 }
 
